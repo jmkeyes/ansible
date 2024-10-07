@@ -12,6 +12,7 @@ from ansible.module_utils.common.text.converters import to_text
 from ansible.module_utils.six.moves.collections_abc import Mapping
 from ansible.module_utils.common.collections import is_sequence
 
+_OMIT_PLACEHOLDER_REGEX = re.compile(r'^__omit_place_holder__[0-9a-f]{40}$')
 
 def _is_unsafe(value):
     return getattr(value, '__UNSAFE__', False) and not getattr(value, '__ENCRYPTED__', False)
@@ -37,6 +38,19 @@ def _preprocess_unsafe_encode(value):
     return value
 
 
+def _preprocess_ommitted_encode(value):
+    """Recursively preprocess a data structure skipping over any apparent ``omit`` placeholders.
+
+    Used in ``AnsibleJSONEncoder.iterencode``
+    """
+    if is_sequence(value):
+        value = [v for v in value if not _OMIT_PLACEHOLDER_REGEX.match(v)]
+    elif isinstance(value, Mapping):
+        value = dict((k, v) for k, v in value.items() if not _OMIT_PLACEHOLDER_REGEX.match(v))
+
+    return value
+
+
 def json_dump(structure):
     return json.dumps(structure, cls=AnsibleJSONEncoder, sort_keys=True, indent=4)
 
@@ -46,7 +60,8 @@ class AnsibleJSONEncoder(json.JSONEncoder):
     Simple encoder class to deal with JSON encoding of Ansible internal types
     '''
 
-    def __init__(self, preprocess_unsafe=False, vault_to_text=False, **kwargs):
+    def __init__(self, preprocess_omitted=False, preprocess_unsafe=False, vault_to_text=False, **kwargs):
+        self._preprocess_omitted = preprocess_omitted
         self._preprocess_unsafe = preprocess_unsafe
         self._vault_to_text = vault_to_text
         super(AnsibleJSONEncoder, self).__init__(**kwargs)
@@ -80,5 +95,8 @@ class AnsibleJSONEncoder(json.JSONEncoder):
         """
         if self._preprocess_unsafe:
             o = _preprocess_unsafe_encode(o)
+
+        if self._preprocess_omitted:
+            o = _preprocess_omitted_encode(o)
 
         return super(AnsibleJSONEncoder, self).iterencode(o, **kwargs)
